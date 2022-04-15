@@ -2,10 +2,19 @@ package kv
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"cs426.yale.edu/lab4/kv/proto"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+type toStore struct {
+	data string
+	ttl  time.Time
+}
 
 type KvServerImpl struct {
 	proto.UnimplementedKvServer
@@ -15,6 +24,9 @@ type KvServerImpl struct {
 	listener   *ShardMapListener
 	clientPool ClientPool
 	shutdown   chan struct{}
+	data       sync.Map
+	quit       chan bool
+	ticker     *time.Ticker
 }
 
 func (server *KvServerImpl) handleShardMapUpdate() {
@@ -35,13 +47,35 @@ func (server *KvServerImpl) shardMapListenLoop() {
 
 func MakeKvServer(nodeName string, shardMap *ShardMap, clientPool ClientPool) *KvServerImpl {
 	listener := shardMap.MakeListener()
+
 	server := KvServerImpl{
 		nodeName:   nodeName,
 		shardMap:   shardMap,
 		listener:   &listener,
 		clientPool: clientPool,
 		shutdown:   make(chan struct{}),
+		quit:       make(chan bool),
+		ticker:     time.NewTicker(2 * time.Second),
 	}
+
+	go func() {
+		for {
+			select {
+			case <-server.quit:
+				server.ticker.Stop()
+				return
+			case <-server.ticker.C:
+				server.data.Range(func(key, value interface{}) bool {
+					val := value.(*toStore)
+					if time.Now().After(val.ttl) {
+						server.data.Delete(key)
+					}
+					return true
+				})
+			}
+		}
+	}()
+
 	go server.shardMapListenLoop()
 	server.handleShardMapUpdate()
 	return &server
@@ -49,7 +83,17 @@ func MakeKvServer(nodeName string, shardMap *ShardMap, clientPool ClientPool) *K
 
 func (server *KvServerImpl) Shutdown() {
 	server.shutdown <- struct{}{}
+	server.quit <- true
 	server.listener.Close()
+}
+
+func contains(s []int, e int) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
 }
 
 func (server *KvServerImpl) Get(
@@ -63,7 +107,31 @@ func (server *KvServerImpl) Get(
 		logrus.Fields{"node": server.nodeName, "key": request.Key},
 	).Trace("node received Get() request")
 
-	panic("TODO: Part A")
+	if request.Key == "" {
+		return &proto.GetResponse{Value: "", WasFound: false}, status.Error(codes.InvalidArgument, "InvalidArgument")
+	}
+
+	shard := GetShardForKey(request.Key, server.shardMap.NumShards())
+	hostedShards := server.shardMap.ShardsForNode(server.nodeName)
+	if !contains(hostedShards, shard) {
+		return &proto.GetResponse{Value: "", WasFound: false}, status.Error(codes.NotFound, "NotFound")
+	}
+
+	val, ok := server.data.Load(request.Key)
+
+	if !ok {
+		return &proto.GetResponse{Value: "", WasFound: false}, nil
+	} else {
+		value := val.(*toStore)
+		if time.Now().Before(value.ttl) {
+			return &proto.GetResponse{Value: value.data, WasFound: true}, nil
+		} else {
+			server.data.Delete(request.Key)
+			return &proto.GetResponse{Value: "", WasFound: false}, nil
+		}
+	}
+
+	// panic("TODO: Part A")
 }
 
 func (server *KvServerImpl) Set(
@@ -74,7 +142,22 @@ func (server *KvServerImpl) Set(
 		logrus.Fields{"node": server.nodeName, "key": request.Key},
 	).Trace("node received Set() request")
 
-	panic("TODO: Part A")
+	// log.Println(server.nodeName)
+
+	if request.Key == "" {
+		return &proto.SetResponse{}, status.Error(codes.InvalidArgument, "InvalidArgument")
+	}
+
+	shard := GetShardForKey(request.Key, server.shardMap.NumShards())
+	hostedShards := server.shardMap.ShardsForNode(server.nodeName)
+	if !contains(hostedShards, shard) {
+		return &proto.SetResponse{}, status.Error(codes.NotFound, "NotFound")
+	}
+
+	server.data.Store(request.Key, &toStore{data: request.Value, ttl: time.Now().Add(time.Duration(request.TtlMs) * time.Millisecond)})
+
+	return &proto.SetResponse{}, nil
+	// panic("TODO: Part A")
 }
 
 func (server *KvServerImpl) Delete(
@@ -85,7 +168,20 @@ func (server *KvServerImpl) Delete(
 		logrus.Fields{"node": server.nodeName, "key": request.Key},
 	).Trace("node received Delete() request")
 
-	panic("TODO: Part A")
+	if request.Key == "" {
+		return &proto.DeleteResponse{}, status.Error(codes.InvalidArgument, "InvalidArgument")
+	}
+
+	shard := GetShardForKey(request.Key, server.shardMap.NumShards())
+	hostedShards := server.shardMap.ShardsForNode(server.nodeName)
+	if !contains(hostedShards, shard) {
+		return &proto.DeleteResponse{}, status.Error(codes.NotFound, "NotFound")
+	}
+
+	server.data.Delete(request.Key)
+
+	return &proto.DeleteResponse{}, nil
+	// panic("TODO: Part A")
 }
 
 func (server *KvServerImpl) GetShardContents(
