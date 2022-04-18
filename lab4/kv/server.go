@@ -20,13 +20,14 @@ type KvServerImpl struct {
 	proto.UnimplementedKvServer
 	nodeName string
 
-	shardMap   *ShardMap
-	listener   *ShardMapListener
-	clientPool ClientPool
-	shutdown   chan struct{}
-	data       sync.Map
-	quit       chan bool
-	ticker     *time.Ticker
+	shardMap     *ShardMap
+	listener     *ShardMapListener
+	clientPool   ClientPool
+	shutdown     chan struct{}
+	data         sync.Map
+	quit         chan bool
+	ticker       *time.Ticker
+	hostedShards []int
 }
 
 func (server *KvServerImpl) handleShardMapUpdate() {
@@ -57,6 +58,19 @@ func MakeKvServer(nodeName string, shardMap *ShardMap, clientPool ClientPool) *K
 		quit:       make(chan bool),
 		ticker:     time.NewTicker(2 * time.Second),
 	}
+
+	server.hostedShards = server.shardMap.ShardsForNode(server.nodeName)
+
+	go func() {
+		for {
+			select {
+			case <-server.quit:
+				return
+			case <-server.listener.ch:
+				server.hostedShards = server.listener.shardMap.ShardsForNode(server.nodeName)
+			}
+		}
+	}()
 
 	go func() {
 		for {
@@ -112,8 +126,8 @@ func (server *KvServerImpl) Get(
 	}
 
 	shard := GetShardForKey(request.Key, server.shardMap.NumShards())
-	hostedShards := server.shardMap.ShardsForNode(server.nodeName)
-	if !contains(hostedShards, shard) {
+	// hostedShards := server.shardMap.ShardsForNode(server.nodeName)
+	if !contains(server.hostedShards, shard) {
 		return &proto.GetResponse{Value: "", WasFound: false}, status.Error(codes.NotFound, "NotFound")
 	}
 
@@ -149,8 +163,8 @@ func (server *KvServerImpl) Set(
 	}
 
 	shard := GetShardForKey(request.Key, server.shardMap.NumShards())
-	hostedShards := server.shardMap.ShardsForNode(server.nodeName)
-	if !contains(hostedShards, shard) {
+	// hostedShards := server.shardMap.ShardsForNode(server.nodeName)
+	if !contains(server.hostedShards, shard) {
 		return &proto.SetResponse{}, status.Error(codes.NotFound, "NotFound")
 	}
 
@@ -173,8 +187,8 @@ func (server *KvServerImpl) Delete(
 	}
 
 	shard := GetShardForKey(request.Key, server.shardMap.NumShards())
-	hostedShards := server.shardMap.ShardsForNode(server.nodeName)
-	if !contains(hostedShards, shard) {
+	// hostedShards := server.shardMap.ShardsForNode(server.nodeName)
+	if !contains(server.hostedShards, shard) {
 		return &proto.DeleteResponse{}, status.Error(codes.NotFound, "NotFound")
 	}
 
