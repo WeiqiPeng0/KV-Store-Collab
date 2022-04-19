@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"log"
 
 	"github.com/sirupsen/logrus"
 
@@ -584,20 +585,23 @@ func TestServerSingleShardDropDataDeleted(t *testing.T) {
 
 	_, _, err = setup.NodeGet("n1", "abc")
 	assertShardNotAssigned(t, err)
-
+	print("CheckPiont B \n")
 	// Add shard 1 back to n1
 	setup.UpdateShardMapping(map[int][]string{
 		1: {"n1"},
 	})
-
+	print("CheckPoint B-c")
 	_, wasFound, err := setup.NodeGet("n1", "abc")
+	log.Printf("%v and %v \n", err, wasFound)
+	print("CheckPoint C \n")
 	assert.Nil(t, err)
+	print("CheckPoint D \n")
 	assert.False(t, wasFound)
 
 	setup.Shutdown()
 }
 
-func TestServerSingleShardMoveNoCopy(t *testing.T) {
+func TestServerSingleShard(t *testing.T) {
 	// This test sets up a two node cluster with a single shard
 	// Shard 1 stards on node n1, has some data written, then shard 1
 	// is dropped entirely.
@@ -663,20 +667,22 @@ func TestServerSingleShardMoveWithCopy(t *testing.T) {
 			},
 		},
 	)
-
+	log.Printf("CheckPoint A")
 	// n1 hosts the shard, so we should be able to set data
 	err := setup.NodeSet("n1", "abc", "123", 10*time.Second)
 	assert.Nil(t, err)
-
+	log.Printf("CheckPoint B")
 	// Add shard 1 to n2
 	setup.UpdateShardMapping(map[int][]string{
 		1: {"n1", "n2"},
 	})
+
+	log.Printf("CheckPoint C")
 	// Remove shard 1 from n1
 	setup.UpdateShardMapping(map[int][]string{
 		1: {"n2"},
 	})
-
+	log.Printf("CheckPoint D")
 	_, _, err = setup.NodeGet("n1", "abc")
 	// shard no longer mapped, so should error
 	assertShardNotAssigned(t, err)
@@ -684,9 +690,11 @@ func TestServerSingleShardMoveWithCopy(t *testing.T) {
 	// should be assigned to n2 now and data should've
 	// been copied over from n1
 	val, wasFound, err := setup.NodeGet("n2", "abc")
+	log.Printf("%v and %v \n", wasFound, err)
 	assert.Nil(t, err)
 	assert.True(t, wasFound)
 	assert.Equal(t, val, "123")
+	log.Printf("CheckPoint E")
 
 	setup.Shutdown()
 }
@@ -786,25 +794,38 @@ func TestServerRestartShardCopy(t *testing.T) {
 	err = setup.NodeSet("n2", "abc", "123", 100*time.Second)
 	assert.Nil(t, err)
 
+	print("CheckPoint A \n")
+
 	// Value should exist on n1 and n2
 	val, wasFound, err := setup.NodeGet("n1", "abc")
 	assert.Nil(t, err)
 	assert.True(t, wasFound)
 	assert.Equal(t, "123", val)
 
+	print("CheckPoint B \n")
+
 	val, wasFound, err = setup.NodeGet("n2", "abc")
 	assert.Nil(t, err)
 	assert.True(t, wasFound)
 	assert.Equal(t, "123", val)
+
+	print("CheckPoint C \n")
 
 	setup.nodes["n2"].Shutdown()
 	setup.nodes["n2"] = kv.MakeKvServer("n2", setup.shardMap, &setup.clientPool)
 
+
+	print("CheckPoint D \n")
+
 	// n2 should copy the data from n1 on restart
+
 	val, wasFound, err = setup.NodeGet("n2", "abc")
+	log.Printf("%v, %v, %v \n", val, wasFound, err)
 	assert.Nil(t, err)
 	assert.True(t, wasFound)
 	assert.Equal(t, "123", val)
+
+	print("CheckPoint E \n")
 
 	setup.Shutdown()
 }
